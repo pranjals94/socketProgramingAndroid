@@ -1,0 +1,174 @@
+package com.example.mqttapp
+
+import android.os.Bundle
+import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.mqttapp.ui.theme.MqttAppTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.SocketChannel
+import java.net.InetSocketAddress
+import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
+import java.util.\*
+
+// gradel 8 does not allow usage of android instead androidx is used
+// Mqtt Libries like Eclipse Paho(did not support androidX libraries), hivwMQ did not support
+
+class MainActivity : ComponentActivity() {
+override fun onCreate(savedInstanceState: Bundle?) {
+super.onCreate(savedInstanceState)
+CoroutineScope(Dispatchers.IO).launch {// run in a thread
+connectAndPublish()
+}
+setContent {
+MqttAppTheme {
+// A surface container using the 'background' color from the theme
+Surface(
+modifier = Modifier.fillMaxSize(),
+color = MaterialTheme.colorScheme.background
+)
+{
+Greeting("Android")
+}
+}
+}
+}
+//-----------------------------------------------------------------------------------
+
+    private val username = "YourUsername"
+    private val aioKey = "YourAdafruitKey"
+    private val topic = "$username/feeds/test"
+    private val clientId = "android-kotlin-client"
+
+    private fun encodeString(str: String): ByteArray {
+        val bytes = str.toByteArray(StandardCharsets.UTF_8)
+        return byteArrayOf((bytes.size shr 8).toByte(), (bytes.size and 0xFF).toByte()) + bytes
+    }
+
+    private fun encodeLength(length: Int): ByteArray {
+        var value = length
+        val encoded = mutableListOf<Byte>()
+        do {
+            var byte = (value % 128).toByte()
+            value /= 128
+            if (value > 0) byte = (byte.toInt() or 0x80).toByte()
+            encoded.add(byte)
+        } while (value > 0)
+        return encoded.toByteArray()
+    }
+
+    private fun buildConnectPacket(clientId: String, username: String, password: String): ByteArray {
+        val protocolName = encodeString("MQTT")
+        val protocolLevel = byteArrayOf(0x04) // MQTT 3.1.1
+        val connectFlags = byteArrayOf(0b1100_0000.toByte()) // username & password
+        val keepAlive = byteArrayOf(0x00, 0x3C) // 60 seconds
+
+        val payload = encodeString(clientId) + encodeString(username) + encodeString(password)
+        val variableHeader = protocolName + protocolLevel + connectFlags + keepAlive
+        val remainingLength = encodeLength(variableHeader.size + payload.size)
+
+        return byteArrayOf(0x10) + remainingLength + variableHeader + payload
+    }
+
+    private fun buildPublishPacket(topic: String, message: String): ByteArray {
+        val topicBytes = encodeString(topic)
+        val messageBytes = message.toByteArray(StandardCharsets.UTF_8)
+        val remainingLength = encodeLength(topicBytes.size + messageBytes.size)
+        //first byte 0x30 means qos =0;0x32 means qos =1; 0x34 means qos =2; google for mor details
+        return byteArrayOf(0x30) + remainingLength + topicBytes + messageBytes
+    }
+    private fun buildSubscribePacket(packetId: Int, topic: String, qos: Int): ByteArray {
+        // Step 1: Encode the topic as a UTF-8 string with a length prefix
+        val topicBytes = encodeString(topic)
+
+        // Step 2: Fixed Header
+        // 0x80 for SUBSCRIBE packet type, with reserved flag bits
+        val fixedHeader = byteArrayOf(0x80.toByte())
+
+        // Step 3: Remaining Length
+        // Remaining length is calculated as the sum of the length of the variable header and payload
+        val remainingLength = encodeLength(2 + topicBytes.size + 1) // 2 bytes for packetId, topic length, and QoS byte
+
+        // Step 4: Packet Identifier (2-byte, big-endian)
+        val packetIdBytes = byteArrayOf(
+            (packetId shr 8).toByte(),  // High byte of packet ID
+            (packetId and 0xFF).toByte() // Low byte of packet ID
+        )
+
+        // Step 5: Payload (Topic + QoS level)
+        // Topic is encoded in the previous step, and QoS is provided by the argument
+        val payload = topicBytes + byteArrayOf(qos.toByte())
+
+        // Step 6: Combine everything
+        return fixedHeader + remainingLength + packetIdBytes + payload
+    }
+
+
+    private fun connectAndPublish() {
+        try {
+            val buffer = ByteBuffer.allocate(1024)
+            val socket = SocketChannel.open()
+
+            Log.d("MQTT", "📤 sending connect")
+
+            socket.connect(InetSocketAddress("io.adafruit.com", 1883))
+            Log.d("MQTT", "🔌 Connected to Adafruit IO")
+
+           val connectPacket = buildConnectPacket(clientId, username, aioKey)
+           socket.write(ByteBuffer.wrap(connectPacket))
+           Log.d("MQTT", "📤 CONNECT sent")
+
+
+           socket.read(buffer)
+           buffer.flip()
+           val connack = ByteArray(buffer.remaining())
+           buffer.get(connack)
+           Log.d("MQTT", "📥 CONNACK: ${connack.joinToString(" ") { "%02x".format(it) }}")
+
+           val message = "Hello from Developer"
+           val publishPacket = buildPublishPacket(topic, message)
+           socket.write(ByteBuffer.wrap(publishPacket))
+           Log.d("MQTT", "📤 Published: $message")
+           socket.read(buffer)
+           buffer.flip()
+           buffer.get(connack)
+           Log.d("MQTT", "📥 CONNACK: ${connack.joinToString(" ") { "%02x".format(it) }}")
+
+            socket.close()
+
+        } catch (e: Exception) {
+            Log.e("MQTT", "❌ Error: ${e.message}", e)
+        }
+    }
+
+//-------------------------------------------------------------------------------------
+}
+
+@Composable
+fun Greeting(name: String, modifier: Modifier = Modifier) {
+Text(
+text = "Hello $name!",
+modifier = modifier
+)
+}
+
+@Preview(showBackground = true)
+@Composable
+fun GreetingPreview() {
+MqttAppTheme {
+Greeting("Android")
+}
+}
