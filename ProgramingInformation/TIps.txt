@@ -1,0 +1,12 @@
+Yes, in many cases you can find the file name using a hex editor, if the file format stores or embeds the file name in its binary structure. But it depends on the file type and how the file was created or packaged.
+
+🗂️ In actual File Name Is Stored by the File System
+The file system (e.g., NTFS, ext4, FAT32, APFS) keeps track of:
+
+1. The file name
+
+2. File location (where data is stored on disk)
+
+2. Metadata (size, timestamps, permissions, etc.)
+
+🧩 Analogy: Think of the file system as a table of contents — the filename is just a label that points to actual data blocks.
